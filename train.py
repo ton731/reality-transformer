@@ -79,7 +79,7 @@ def get_loggings(ckpt_dir):
 
 # R for Reality
 # A for Animation
-def train_fn(disc_R, disc_A, gen_R, gen_A, loader, opt_disc, opt_gen, l1, mse, d_scaler, g_scaler, epoch, visualization_dir):
+def train_fn(disc_R, disc_A, gen_R, gen_A, loader, opt_disc, opt_gen, l1, mse, epoch, visualization_dir):
 	loop = tqdm(loader, leave=True)
 	R_reals = 0
 	R_fakes = 0
@@ -110,9 +110,8 @@ def train_fn(disc_R, disc_A, gen_R, gen_A, loader, opt_disc, opt_gen, l1, mse, d
 			D_loss = (D_R_loss + D_A_loss) / 2
 		
 		opt_disc.zero_grad()
-		d_scaler.scale(D_loss).backward()
-		d_scaler.step(opt_disc)
-		d_scaler.update()
+		D_loss.backward()
+		opt_disc.step()
 
 		# Train Generators H and Z
 		with torch.cuda.amp.autocast():
@@ -145,9 +144,8 @@ def train_fn(disc_R, disc_A, gen_R, gen_A, loader, opt_disc, opt_gen, l1, mse, d
 			)
 		
 		opt_gen.zero_grad()
-		g_scaler.scale(G_loss).backward()
-		g_scaler.step(opt_gen)
-		g_scaler.update()
+		G_loss.backward()
+		opt_gen.step()
 
 		if idx % 200 == 0:
 			save_image(fake_reality * 0.5 + 0.5, visualization_dir / f"fake_reality_epoch{epoch}_idx{idx}.png")
@@ -213,10 +211,6 @@ def main(args):
 		pin_memory=True,
 	)
 
-	# mixed precision settings
-	g_scaler = torch.cuda.amp.GradScaler()
-	d_scaler = torch.cuda.amp.GradScaler()
-
 	# training (currently no validation)
 	for epoch in range(args.num_epoch):
 		print(f"Epoch: {epoch+1}/{args.num_epoch}")
@@ -230,8 +224,6 @@ def main(args):
 			opt_gen,
 			L1,
 			mse,
-			d_scaler,
-			g_scaler,
 			epoch,
 			visualization_dir,
 		)
