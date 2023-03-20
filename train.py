@@ -13,7 +13,7 @@ import numpy as np
 import random
 from pathlib import Path
 
-from dataset import RealityAnimationDataset
+from utils.dataset import RealityAnimationDataset
 from model.generator import Generator
 from model.discriminator import Discriminator
 
