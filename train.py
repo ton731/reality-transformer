@@ -1,195 +1,243 @@
 import torch
-from dataset import HorseZebraDataset
-import sys
-from utils import save_checkpoint, load_checkpoint
-from torch.utils.data import DataLoader
 import torch.nn as nn
 import torch.optim as optim
-import config
-from tqdm import tqdm
+from torch.utils.data import DataLoader
 from torchvision.utils import save_image
-from generator import Generator
-from discriminator import Discriminator
-# import os
-# os.environ["KMP_DUPLICATE_LIB_OK"]  =  "TRUE"
+
+from argparse import ArgumentParser, Namespace
+from tqdm import tqdm
+from datetime import datetime
+import os
+import logging
+import numpy as np
+import random
+from pathlib import Path
+
+from dataset import RealityAnimationDataset
+from model.generator import Generator
+from model.discriminator import Discriminator
 
 
-def train_fn(disc_H, disc_Z, gen_Z, gen_H, loader, opt_disc, opt_gen, l1, mse, d_scaler, g_scaler, epoch):
-    loop = tqdm(loader, leave=True)
-    H_reals = 0
-    H_fakes = 0
 
-    for idx, (zebra, horse) in enumerate(loop):
-        zebra = zebra.to(config.DEVICE)
-        horse = horse.to(config.DEVICE)
+def parse_args() -> Namespace:
+	parser = ArgumentParser()
 
-        # Train Discriminator H and Z
-        with torch.cuda.amp.autocast():
-            fake_horse = gen_H(zebra)
-            D_H_real = disc_H(horse)
-            D_H_fake = disc_H(fake_horse.detach())
-            H_reals += D_H_real.mean().item()
-            H_fakes += D_H_fake.mean().item()
-            D_H_real_loss = mse(D_H_real, torch.ones_like(D_H_real))
-            D_H_fake_loss = mse(D_H_fake, torch.zeros_like(D_H_real))
-            D_H_loss = D_H_real_loss + D_H_fake_loss
+	# data path
+	parser.add_argument("--data_dir", type=Path, default="./data/")
 
-            fake_zebra = gen_Z(horse)
-            D_Z_real = disc_Z(zebra)
-            D_Z_fake = disc_Z(fake_zebra.detach())
-            D_Z_real_loss = mse(D_Z_real, torch.ones_like(D_Z_real))
-            D_Z_fake_loss = mse(D_Z_fake, torch.zeros_like(D_Z_fake))
-            D_Z_loss = D_Z_real_loss + D_Z_fake_loss
+	# checkpoint
+	parser.add_argument("--ckpt_dir", type=Path, default="./results/")
 
-            # put it together
-            D_loss = (D_H_loss + D_Z_loss) / 2
-        
-        opt_disc.zero_grad()
-        d_scaler.scale(D_loss).backward()
-        d_scaler.step(opt_disc)
-        d_scaler.update()
+	# output image size
+	parser.add_argument("--img_size", type=int, default=256)
 
-        # Train Generators H and Z
-        with torch.cuda.amp.autocast():
-            # advesarial loss for both generators
-            D_H_fake = disc_H(fake_horse)
-            D_Z_fake = disc_Z(fake_zebra)
-            loss_G_H = mse(D_H_fake, torch.ones_like(D_H_fake))
-            loss_G_Z = mse(D_Z_fake, torch.ones_like(D_Z_fake))
+	# cycleGAN
+	parser.add_argument("--lambda_identity", type=float, default=0.0)
+	parser.add_argument("--lambda_cycle", type=float, default=10)
 
-            # cycle loss
-            cycle_zebra = gen_Z(fake_horse)
-            cycle_horse = gen_H(fake_zebra)
-            cycle_zebra_loss = l1(zebra, cycle_zebra)
-            cycle_horse_loss = l1(horse, cycle_horse)
+	# training
+	parser.add_argument("--batch_size", type=int, default=3)
+	parser.add_argument("--lr", type=float, default=1e-5)
+	parser.add_argument("--num_workers", type=int, default=4)
+	parser.add_argument("--num_epoch", type=int, default=150)
+	parser.add_argument("--device", type=torch.device, default="cuda")
 
-            # identity loss (remove these for efficiency if you set lambda_identity=0)
-            # identity_zebra = gen_Z(zebra)
-            # identity_horse = gen_H(horse)
-            # identity_zebra_loss = l1(zebra, identity_zebra)
-            # identity_horse_loss = l1(horse, identity_horse)
+	args = parser.parse_args()
+	return args
 
-            # add all together
-            G_loss = (
-                loss_G_Z
-                + loss_G_H
-                + cycle_zebra_loss * config.LAMBDA_CYCLE
-                + cycle_horse_loss * config.LAMBDA_CYCLE
-                # + identity_zebra_loss * config.LAMBDA_IDENTITY
-                # + identity_horse_loss * config.LAMBDA_IDENTITY
-            )
-        
-        opt_gen.zero_grad()
-        g_scaler.scale(G_loss).backward()
-        g_scaler.step(opt_gen)
-        g_scaler.update()
 
-        if idx % 200 == 0:
-            save_image(fake_horse * 0.5 + 0.5, f"Results/saved_images/fake_horse_epoch{epoch}_idx{idx}.png")
-            save_image(fake_zebra * 0.5 + 0.5, f"Results/saved_images/fake_zebra_epoch{epoch}_idx{idx}.png")
-        
-        loop.set_postfix(H_real=H_reals / (idx + 1), H_fake=H_fakes / (idx + 1))
+
+def set_random_seed(SEED: int):
+	random.seed(SEED)
+	np.random.seed(SEED)
+	torch.manual_seed(SEED)
+	torch.cuda.manual_seed(SEED)
+	torch.backends.cudnn.deterministic = True
+	torch.backends.cudnn.enabled = True
+	torch.backends.cudnn.benchmark = True
+	torch.autograd.set_detect_anomaly(True)
+
+
+
+def get_loggings(ckpt_dir):
+	logger = logging.getLogger(name='CycleGAN')
+	logger.setLevel(level=logging.INFO)
+	# set formatter
+	formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+	# console handler
+	stream_handler = logging.StreamHandler()
+	stream_handler.setFormatter(formatter)
+	logger.addHandler(stream_handler)
+	# file handler
+	file_handler = logging.FileHandler(ckpt_dir / "record.log")
+	file_handler.setFormatter(formatter)
+	logger.addHandler(file_handler)
+	return logger
 
 
 
 
+# R for Reality
+# A for Animation
+def train_fn(disc_R, disc_A, gen_R, gen_A, loader, opt_disc, opt_gen, l1, mse, d_scaler, g_scaler, epoch, visualization_dir):
+	loop = tqdm(loader, leave=True)
+	R_reals = 0
+	R_fakes = 0
 
-def main():
-    disc_H = Discriminator(in_channels=3).to(config.DEVICE) # discriminate horse
-    disc_Z = Discriminator(in_channels=3).to(config.DEVICE)
-    gen_Z = Generator(img_channels=3, num_residuals=9).to(config.DEVICE)
-    gen_H = Generator(img_channels=3, num_residuals=9).to(config.DEVICE)
-    opt_disc = optim.Adam(
-        list(disc_H.parameters()) + list(disc_Z.parameters()),
-        lr=config.LEARNING_RATE,
-        betas=(0.5, 0.999),
-    )
+	for idx, (animation, reality) in enumerate(loop):
+		animation = animation.to(args.device)
+		reality = reality.to(args.device)
 
-    opt_gen = optim.Adam(
-        list(gen_Z.parameters()) + list(gen_H.parameters()),
-        lr=config.LEARNING_RATE,
-        betas=(0.5, 0.999),
-    )
+		# Train Discriminator H and Z
+		with torch.cuda.amp.autocast():
+			fake_reality = gen_R(animation)
+			D_R_real = disc_R(reality)
+			D_R_fake = disc_R(fake_reality.detach())
+			R_reals += D_R_real.mean().item()
+			R_fakes += D_R_fake.mean().item()
+			D_R_real_loss = mse(D_R_real, torch.ones_like(D_R_real))
+			D_R_fake_loss = mse(D_R_fake, torch.zeros_like(D_R_real))
+			D_R_loss = D_R_real_loss + D_R_fake_loss
 
-    L1 = nn.L1Loss()
-    mse = nn.MSELoss()
+			fake_animation = gen_A(reality)
+			D_A_real = disc_A(animation)
+			D_A_fake = disc_A(fake_animation.detach())
+			D_A_real_loss = mse(D_A_real, torch.ones_like(D_A_real))
+			D_A_fake_loss = mse(D_A_fake, torch.zeros_like(D_A_fake))
+			D_A_loss = D_A_real_loss + D_A_fake_loss
 
-    if config.LOAD_MODEL:
-        load_checkpoint(
-            config.CHECKPOINT_GEN_H,
-            gen_H,
-            opt_gen,
-            config.LEARNING_RATE,
-        )
-        load_checkpoint(
-            config.CHECKPOINT_GEN_Z,
-            gen_Z,
-            opt_gen,
-            config.LEARNING_RATE,
-        )
-        load_checkpoint(
-            config.CHECKPOINT_CRITIC_H,
-            disc_H,
-            opt_disc,
-            config.LEARNING_RATE,
-        )
-        load_checkpoint(
-            config.CHECKPOINT_CRITIC_Z,
-            disc_Z,
-            opt_disc,
-            config.LEARNING_RATE,
-        )
+			# put it together
+			D_loss = (D_R_loss + D_A_loss) / 2
+		
+		opt_disc.zero_grad()
+		d_scaler.scale(D_loss).backward()
+		d_scaler.step(opt_disc)
+		d_scaler.update()
 
-    dataset = HorseZebraDataset(
-        root_horse=config.TRAIN_DIR + "/horses",
-        root_zebra=config.TRAIN_DIR + "/zebras",
-        transform=config.transforms,
-    )
-    # val_dataset = HorseZebraDataset(
-    #     root_horse="cyclegan_test/horse1",
-    #     root_zebra="cyclegan_test/zebra1",
-    #     transform=config.transforms,
-    # )
-    # val_loader = DataLoader(
-    #     val_dataset,
-    #     batch_size=1,
-    #     shuffle=False,
-    #     pin_memory=True,
-    # )
-    loader = DataLoader(
-        dataset,
-        batch_size=config.BATCH_SIZE,
-        shuffle=True,
-        num_workers=config.NUM_WORKERS,
-        pin_memory=True,
-    )
-    g_scaler = torch.cuda.amp.GradScaler()
-    d_scaler = torch.cuda.amp.GradScaler()
+		# Train Generators H and Z
+		with torch.cuda.amp.autocast():
+			# advesarial loss for both generators
+			D_R_fake = disc_R(fake_reality)
+			D_A_fake = disc_A(fake_animation)
+			loss_G_R = mse(D_R_fake, torch.ones_like(D_R_fake))
+			loss_G_A = mse(D_A_fake, torch.ones_like(D_A_fake))
 
-    for epoch in range(config.NUM_EPOCHS):
-        print(f"Epoch: {epoch+1}/{config.NUM_EPOCHS}")
-        train_fn(
-            disc_H,
-            disc_Z,
-            gen_Z,
-            gen_H,
-            loader,
-            opt_disc,
-            opt_gen,
-            L1,
-            mse,
-            d_scaler,
-            g_scaler,
-            epoch
-        )
+			# cycle loss
+			cycle_animation = gen_A(fake_reality)
+			cycle_reality = gen_R(fake_animation)
+			cycle_animation_loss = l1(animation, cycle_animation)
+			cycle_reality_loss = l1(reality, cycle_reality)
 
-        if config.SAVE_MODEL:
-            save_checkpoint(gen_H, opt_gen, filename=config.CHECKPOINT_GEN_H)
-            save_checkpoint(gen_Z, opt_gen, filename=config.CHECKPOINT_GEN_Z)
-            save_checkpoint(disc_H, opt_disc, filename=config.CHECKPOINT_CRITIC_H)
-            save_checkpoint(disc_Z, opt_disc, filename=config.CHECKPOINT_CRITIC_Z)
+			# identity loss (remove these for efficiency if you set lambda_identity=0)
+			# identity_animation = gen_A(animation)
+			# identity_reality = gen_R(reality)
+			# identity_animation_loss = l1(animation, identity_animation)
+			# identity_reality_loss = l1(reality, identity_reality)
+
+			# add all together
+			G_loss = (
+				loss_G_A
+				+ loss_G_R
+				+ cycle_animation_loss * args.lambda_cycle
+				+ cycle_reality_loss * args.lambda_cycle
+				# + identity_animation_loss * args.lambda_identity
+				# + identity_reality_loss * args.lambda_identity
+			)
+		
+		opt_gen.zero_grad()
+		g_scaler.scale(G_loss).backward()
+		g_scaler.step(opt_gen)
+		g_scaler.update()
+
+		if idx % 200 == 0:
+			save_image(fake_reality * 0.5 + 0.5, visualization_dir / f"fake_reality_epoch{epoch}_idx{idx}.png")
+			save_image(fake_animation * 0.5 + 0.5, visualization_dir / f"fake_animation_epoch{epoch}_idx{idx}.png")
+		
+		loop.set_postfix(R_real=R_reals / (idx + 1), R_fake=R_fakes / (idx + 1))
+
+
+
+
+
+def main(args):
+
+	# set random seed
+	set_random_seed(731)
+
+	# set checkpoint directory
+	args.ckpt_dir = args.ckpt_dir / datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
+	args.ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+	# save visualization
+	visualization_dir = args.ckpt_dir / "visualization"
+	visualization_dir.mkdir(parents=True, exist_ok=True)
+
+	# set logger
+	logger = get_loggings(args.ckpt_dir)
+	logger.critical(args.ckpt_dir)
+	logger.critical(args)
+
+	# initialize generator, discriminator
+	disc_R = Discriminator(in_channels=3).to(args.device) # discriminate reality
+	disc_A = Discriminator(in_channels=3).to(args.device)
+	gen_A = Generator(img_channels=3, num_residuals=9).to(args.device)
+	gen_R = Generator(img_channels=3, num_residuals=9).to(args.device)
+
+	# optimizer
+	opt_disc = optim.Adam(
+		list(disc_R.parameters()) + list(disc_A.parameters()),
+		lr=args.lr,
+		betas=(0.5, 0.999),
+	)
+	opt_gen = optim.Adam(
+		list(gen_A.parameters()) + list(gen_R.parameters()),
+		lr=args.lr,
+		betas=(0.5, 0.999),
+	)
+
+	# loss functions
+	L1 = nn.L1Loss()
+	mse = nn.MSELoss()
+
+	# dataset & dataloader
+	dataset = RealityAnimationDataset(
+		root_reality=args.data_dir / "reality_images",
+		root_animation=args.data_dir / "animation_images",
+		img_size=args.img_size,
+	)
+	loader = DataLoader(
+		dataset,
+		batch_size=args.batch_size,
+		shuffle=True,
+		num_workers=args.num_workers,
+		pin_memory=True,
+	)
+
+	# mixed precision settings
+	g_scaler = torch.cuda.amp.GradScaler()
+	d_scaler = torch.cuda.amp.GradScaler()
+
+	# training (currently no validation)
+	for epoch in range(args.num_epoch):
+		print(f"Epoch: {epoch+1}/{args.num_epoch}")
+		train_fn(
+			disc_R,
+			disc_A,
+			gen_R,
+			gen_A,
+			loader,
+			opt_disc,
+			opt_gen,
+			L1,
+			mse,
+			d_scaler,
+			g_scaler,
+			epoch,
+			visualization_dir,
+		)
 
 
 
 if __name__ == "__main__":
-    main()
+	args = parse_args()
+	main(args)

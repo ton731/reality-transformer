@@ -3,7 +3,11 @@ from pathlib import Path
 import os
 
 
+# save an image every 3 seconds
+SAVE_IMG_SECONDS = 3
+
 def read_video_to_frames(video_path, img_folder, video_index):
+
     print("Getting frames from:", video_path)
     # Open the video file
     video = cv2.VideoCapture(str(video_path))
@@ -24,8 +28,8 @@ def read_video_to_frames(video_path, img_folder, video_index):
         if not ret:
             break
 
-        # Write the current frame as a JPEG image file per second
-        if count % fps == 0:
+        # Write the current frame as a JPEG image file per several second
+        if count % (fps * SAVE_IMG_SECONDS) == 0:
             cv2.imwrite(str(img_folder / f"{video_index}_{count}.jpg"), frame)
 
         # Increment the frame counter
@@ -39,14 +43,19 @@ def read_video_to_frames(video_path, img_folder, video_index):
 
 def main():
     data_folder = Path("data")
+    data_folder.mkdir(parents=True, exist_ok=True)
+
     reality_video_folder = data_folder / "reality_videos"
     animation_video_folder = data_folder / "animation_videos"
     reality_image_folder = data_folder / "reality_images"
     animation_image_folder = data_folder / "animation_images"
 
-    for i, video_name in enumerate(os.listdir(reality_video_folder)):
-        video_path = reality_video_folder / video_name
-        read_video_to_frames(video_path, reality_image_folder, i)
+    reality_image_folder.mkdir(parents=True, exist_ok=True)
+    animation_image_folder.mkdir(parents=True, exist_ok=True)
+
+    # for i, video_name in enumerate(os.listdir(reality_video_folder)):
+    #     video_path = reality_video_folder / video_name
+    #     read_video_to_frames(video_path, reality_image_folder, i)
 
     for i, video_name in enumerate(os.listdir(animation_video_folder)):
         video_path = animation_video_folder / video_name
