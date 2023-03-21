@@ -89,65 +89,63 @@ def train_fn(disc_R, disc_A, gen_R, gen_A, loader, opt_disc, opt_gen, l1, mse, e
 		reality = reality.to(args.device)
 
 		# Train Discriminator H and Z
-		with torch.cuda.amp.autocast():
-			fake_reality = gen_R(animation)
-			D_R_real = disc_R(reality)
-			D_R_fake = disc_R(fake_reality.detach())
-			R_reals += D_R_real.mean().item()
-			R_fakes += D_R_fake.mean().item()
-			D_R_real_loss = mse(D_R_real, torch.ones_like(D_R_real))
-			D_R_fake_loss = mse(D_R_fake, torch.zeros_like(D_R_real))
-			D_R_loss = D_R_real_loss + D_R_fake_loss
+		fake_reality = gen_R(animation)
+		D_R_real = disc_R(reality)
+		D_R_fake = disc_R(fake_reality.detach())
+		R_reals += D_R_real.mean().item()
+		R_fakes += D_R_fake.mean().item()
+		D_R_real_loss = mse(D_R_real, torch.ones_like(D_R_real))
+		D_R_fake_loss = mse(D_R_fake, torch.zeros_like(D_R_real))
+		D_R_loss = D_R_real_loss + D_R_fake_loss
 
-			fake_animation = gen_A(reality)
-			D_A_real = disc_A(animation)
-			D_A_fake = disc_A(fake_animation.detach())
-			D_A_real_loss = mse(D_A_real, torch.ones_like(D_A_real))
-			D_A_fake_loss = mse(D_A_fake, torch.zeros_like(D_A_fake))
-			D_A_loss = D_A_real_loss + D_A_fake_loss
+		fake_animation = gen_A(reality)
+		D_A_real = disc_A(animation)
+		D_A_fake = disc_A(fake_animation.detach())
+		D_A_real_loss = mse(D_A_real, torch.ones_like(D_A_real))
+		D_A_fake_loss = mse(D_A_fake, torch.zeros_like(D_A_fake))
+		D_A_loss = D_A_real_loss + D_A_fake_loss
 
-			# put it together
-			D_loss = (D_R_loss + D_A_loss) / 2
+		# put it together
+		D_loss = (D_R_loss + D_A_loss) / 2
 		
 		opt_disc.zero_grad()
 		D_loss.backward()
 		opt_disc.step()
 
 		# Train Generators H and Z
-		with torch.cuda.amp.autocast():
-			# advesarial loss for both generators
-			D_R_fake = disc_R(fake_reality)
-			D_A_fake = disc_A(fake_animation)
-			loss_G_R = mse(D_R_fake, torch.ones_like(D_R_fake))
-			loss_G_A = mse(D_A_fake, torch.ones_like(D_A_fake))
+		# advesarial loss for both generators
+		D_R_fake = disc_R(fake_reality)
+		D_A_fake = disc_A(fake_animation)
+		loss_G_R = mse(D_R_fake, torch.ones_like(D_R_fake))
+		loss_G_A = mse(D_A_fake, torch.ones_like(D_A_fake))
 
-			# cycle loss
-			cycle_animation = gen_A(fake_reality)
-			cycle_reality = gen_R(fake_animation)
-			cycle_animation_loss = l1(animation, cycle_animation)
-			cycle_reality_loss = l1(reality, cycle_reality)
+		# cycle loss
+		cycle_animation = gen_A(fake_reality)
+		cycle_reality = gen_R(fake_animation)
+		cycle_animation_loss = l1(animation, cycle_animation)
+		cycle_reality_loss = l1(reality, cycle_reality)
 
-			# identity loss (remove these for efficiency if you set lambda_identity=0)
-			# identity_animation = gen_A(animation)
-			# identity_reality = gen_R(reality)
-			# identity_animation_loss = l1(animation, identity_animation)
-			# identity_reality_loss = l1(reality, identity_reality)
+		# identity loss (remove these for efficiency if you set lambda_identity=0)
+		# identity_animation = gen_A(animation)
+		# identity_reality = gen_R(reality)
+		# identity_animation_loss = l1(animation, identity_animation)
+		# identity_reality_loss = l1(reality, identity_reality)
 
-			# add all together
-			G_loss = (
-				loss_G_A
-				+ loss_G_R
-				+ cycle_animation_loss * args.lambda_cycle
-				+ cycle_reality_loss * args.lambda_cycle
-				# + identity_animation_loss * args.lambda_identity
-				# + identity_reality_loss * args.lambda_identity
-			)
+		# add all together
+		G_loss = (
+			loss_G_A
+			+ loss_G_R
+			+ cycle_animation_loss * args.lambda_cycle
+			+ cycle_reality_loss * args.lambda_cycle
+			# + identity_animation_loss * args.lambda_identity
+			# + identity_reality_loss * args.lambda_identity
+		)
 		
 		opt_gen.zero_grad()
 		G_loss.backward()
 		opt_gen.step()
 
-		if idx % 200 == 0:
+		if idx % 50 == 0:
 			save_image(fake_reality * 0.5 + 0.5, visualization_dir / f"fake_reality_epoch{epoch}_idx{idx}.png")
 			save_image(fake_animation * 0.5 + 0.5, visualization_dir / f"fake_animation_epoch{epoch}_idx{idx}.png")
 		
