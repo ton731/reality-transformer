@@ -7,7 +7,7 @@ from albumentations.pytorch import ToTensorV2
 
 
 class RealityAnimationDataset(Dataset):
-    def __init__(self, root_reality, root_animation, img_size):
+    def __init__(self, root_reality, root_animation, img_size, logger):
         self.root_animation = root_animation
         self.root_reality = root_reality
 
@@ -16,6 +16,8 @@ class RealityAnimationDataset(Dataset):
         self.length_dataset = max(len(self.animation_images), len(self.reality_images))
         self.animation_len = len(self.animation_images)
         self.reality_len = len(self.reality_images)
+        logger.info(f"animation data: {self.animation_len}")
+        logger.info(f"reality data: {self.reality_len}")
 
         self.transform = A.Compose(
             [

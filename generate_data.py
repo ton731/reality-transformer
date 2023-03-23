@@ -79,8 +79,9 @@ def main():
     animation_image_folder.mkdir(parents=True, exist_ok=True)
 
 
-    reality_vedio_names = []
+    reality_vedio_names = ["japan_landscape.mp4", "Natsumi's Firefly.mp4"]
     animation_vedio_names = ["Summer Wars.mkv", "The Garden of Words.mp4"]
+    animation_vedio_names += ["weather.mov", "weather 2.mov", "your name mp4 file.mp4"]
 
 
     # for i, video_name in enumerate(os.listdir(reality_video_folder)):
@@ -89,9 +90,9 @@ def main():
         read_video_to_frames(video_path, reality_image_folder, i)
 
     # for i, video_name in enumerate(os.listdir(animation_video_folder)):
-    for i, video_name in enumerate(animation_vedio_names):
-        video_path = animation_video_folder / video_name
-        read_video_to_frames(video_path, animation_image_folder, i)
+    # for i, video_name in enumerate(animation_vedio_names):
+    #     video_path = animation_video_folder / video_name
+    #     read_video_to_frames(video_path, animation_image_folder, i)
 
 
     

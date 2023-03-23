@@ -200,6 +200,7 @@ def main(args):
 		root_reality=args.data_dir / "reality_images",
 		root_animation=args.data_dir / "animation_images",
 		img_size=args.img_size,
+		logger=logger,
 	)
 	loader = DataLoader(
 		dataset,
