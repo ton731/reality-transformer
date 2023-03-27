@@ -16,6 +16,7 @@ from pathlib import Path
 
 from utils.dataset import SkecthRenderDataset
 from utils.metrics import CycleGANMetric
+from utils.plot import plot_metric
 from model.generator import Generator
 from model.discriminator import Discriminator
 
@@ -45,7 +46,7 @@ def parse_args() -> Namespace:
 
 	# cycleGAN
 	parser.add_argument("--use_identity", action="store_true", default=False)
-	parser.add_argument("--lambda_identity", type=float, default=0.0)
+	parser.add_argument("--lambda_identity", type=float, default=1)
 	parser.add_argument("--lambda_cycle", type=float, default=10)
 
 	# training
@@ -358,6 +359,9 @@ def main(args):
 						"logger": logger, "visualization_paths": visualization_paths}
 		train_fn(**train_kwargs)
 		valid_fn(**train_kwargs)
+
+	# plot
+	plot_metric(train_metric, valid_metric, A_name, B_name, args.ckpt_dir)
 
 
 
