@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import random_split
 from torch.utils.data import DataLoader
 from torchvision.utils import save_image
 
@@ -19,11 +20,21 @@ from model.discriminator import Discriminator
 
 
 
+# A_name = "reality"
+# B_name = "animation"
+
+A_name = "photo"
+B_name = "monet"
+
+
+
+
 def parse_args() -> Namespace:
 	parser = ArgumentParser()
 
 	# data path
 	parser.add_argument("--data_dir", type=Path, default="./data/")
+	parser.add_argument("--project_name", type=str, default="monet2photo", help="reality2animation, monet2photo")	
 
 	# checkpoint
 	parser.add_argument("--ckpt_dir", type=Path, default="./results/")
@@ -32,11 +43,12 @@ def parse_args() -> Namespace:
 	parser.add_argument("--img_size", type=int, default=256)
 
 	# cycleGAN
+	parser.add_argument("--use_identity", action="store_true", default=False)
 	parser.add_argument("--lambda_identity", type=float, default=0.0)
 	parser.add_argument("--lambda_cycle", type=float, default=10)
 
 	# training
-	parser.add_argument("--batch_size", type=int, default=1)
+	parser.add_argument("--batch_size", type=int, default=2)
 	parser.add_argument("--lr", type=float, default=1e-5)
 	parser.add_argument("--num_workers", type=int, default=4)
 	parser.add_argument("--num_epoch", type=int, default=150)
@@ -76,24 +88,29 @@ def get_loggings(ckpt_dir):
 
 
 
+def train_fn(disc_A, disc_B, gen_A, gen_B, 
+			 train_loader, 
+			 opt_disc, opt_gen,
+			 use_identity, 
+			 l1, mse, 
+			 epoch, visualization_paths,
+			 **kwargs):
 
-# A for domain A
-# B for domain B
-def train_fn(disc_A, disc_B, gen_A, gen_B, loader, opt_disc, opt_gen, l1, mse, epoch, visualization_dir):
-	loop = tqdm(loader, leave=True)
-	A_reals = 0
-	A_fakes = 0
+	disc_A.train()
+	disc_B.train()
+	gen_A.train()
+	gen_B.train()
 
-	for idx, (B, A) in enumerate(loop):
-		B = B.to(args.device)
+	loop = tqdm(train_loader, leave=True)
+
+	for idx, (A, B) in enumerate(loop):
 		A = A.to(args.device)
+		B = B.to(args.device)
 
-		# Train Discriminator H and Z
+		# Train Discriminator A and B
 		fake_A = gen_A(B)
 		D_A_real = disc_A(A)
 		D_A_fake = disc_A(fake_A.detach())
-		A_reals += D_A_real.mean().item()
-		A_fakes += D_A_fake.mean().item()
 		D_A_real_loss = mse(D_A_real, torch.ones_like(D_A_real))
 		D_A_fake_loss = mse(D_A_fake, torch.zeros_like(D_A_real))
 		D_A_loss = D_A_real_loss + D_A_fake_loss
@@ -126,31 +143,106 @@ def train_fn(disc_A, disc_B, gen_A, gen_B, loader, opt_disc, opt_gen, l1, mse, e
 		cycle_B_loss = l1(B, cycle_B)
 		cycle_A_loss = l1(A, cycle_A)
 
-		# identity loss (remove these for efficiency if you set lambda_identity=0)
-		# identity_B = gen_B(B)
-		# identity_A = gen_A(A)
-		# identity_B_loss = l1(B, identity_B)
-		# identity_A_loss = l1(A, identity_A)
-
 		# add all together
 		G_loss = (
 			loss_G_B
 			+ loss_G_A
 			+ cycle_B_loss * args.lambda_cycle
 			+ cycle_A_loss * args.lambda_cycle
-			# + identity_B_loss * args.lambda_identity
-			# + identity_A_loss * args.lambda_identity
 		)
+
+		# identity loss (remove these for efficiency if you set lambda_identity=0)
+		if use_identity:
+			identity_B = gen_B(B)
+			identity_A = gen_A(A)
+			identity_B_loss = l1(B, identity_B)
+			identity_A_loss = l1(A, identity_A)
+			G_loss += identity_B_loss * args.lambda_identity + identity_A_loss * args.lambda_identity
 		
 		opt_gen.zero_grad()
 		G_loss.backward()
 		opt_gen.step()
 
+		# visualize
 		if idx % 50 == 0:
-			save_image(fake_A * 0.5 + 0.5, visualization_dir / f"fake_reality_epoch{epoch}_idx{idx}.png")
-			save_image(fake_B * 0.5 + 0.5, visualization_dir / f"fake_animation_epoch{epoch}_idx{idx}.png")
+			batch_size = A.shape[0]
+			nrow = batch_size
+			
+			# 1. fake A, fake B
+			save_image(torch.cat([fake_A, B], dim=0) * 0.5 + 0.5, visualization_paths["train_fake"] / f"fake_{A_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
+			save_image(torch.cat([fake_B, A], dim=0) * 0.5 + 0.5, visualization_paths["train_fake"] / f"fake_{B_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
 		
-		loop.set_postfix(A_real=A_reals / (idx + 1), A_fake=A_fakes / (idx + 1))
+			# 2. cycle A, cycle B
+			save_image(torch.cat([cycle_A, A], dim=0) * 0.5 + 0.5, visualization_paths["train_cycle"] / f"cycle_{A_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
+			save_image(torch.cat([cycle_B, B], dim=0) * 0.5 + 0.5, visualization_paths["train_cycle"] / f"cycle_{B_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
+
+			# 3. identity A, identity B
+			if use_identity:
+				save_image(torch.cat([identity_A, A], dim=0) * 0.5 + 0.5, visualization_paths["train_identity"] / f"identity_{A_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
+				save_image(torch.cat([identity_B, B], dim=0) * 0.5 + 0.5, visualization_paths["train_identity"] / f"identity_{B_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
+
+
+
+
+@torch.no_grad()
+def valid_fn(disc_A, disc_B, gen_A, gen_B, 
+			 valid_loader, 
+			 use_identity, 
+			 epoch, visualization_paths,
+			 **kwargs):
+
+	disc_A.eval()
+	disc_B.eval()
+	gen_A.eval()
+	gen_B.eval()
+
+	loop = tqdm(valid_loader, leave=True)
+
+	for idx, (A, B) in enumerate(loop):
+		A = A.to(args.device)
+		B = B.to(args.device)
+
+		# Train Discriminator A and B
+		fake_A = gen_A(B)
+		D_A_real = disc_A(A)
+		D_A_fake = disc_A(fake_A.detach())
+
+		fake_B = gen_B(A)
+		D_B_real = disc_B(B)
+		D_B_fake = disc_B(fake_B.detach())
+
+		# Train Generators H and Z
+		# advesarial loss for both generators
+		D_A_fake = disc_A(fake_A)
+		D_B_fake = disc_B(fake_B)
+
+		# cycle loss
+		cycle_B = gen_B(fake_A)
+		cycle_A = gen_A(fake_B)
+
+		# identity loss (remove these for efficiency if you set lambda_identity=0)
+		if use_identity:
+			identity_B = gen_B(B)
+			identity_A = gen_A(A)
+
+		# visualize
+		if idx % 10 == 0:
+			batch_size = A.shape[0]
+			nrow = batch_size
+			
+			# 1. fake A, fake B
+			save_image(torch.cat([fake_A, B], dim=0) * 0.5 + 0.5, visualization_paths["valid_fake"] / f"fake_{A_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
+			save_image(torch.cat([fake_B, A], dim=0) * 0.5 + 0.5, visualization_paths["valid_fake"] / f"fake_{B_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
+		
+			# 2. cycle A, cycle B
+			save_image(torch.cat([cycle_A, A], dim=0) * 0.5 + 0.5, visualization_paths["valid_cycle"] / f"cycle_{A_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
+			save_image(torch.cat([cycle_B, B], dim=0) * 0.5 + 0.5, visualization_paths["valid_cycle"] / f"cycle_{B_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
+
+			# 3. identity A, identity B
+			if use_identity:
+				save_image(torch.cat([identity_A, A], dim=0) * 0.5 + 0.5, visualization_paths["valid_identity"] / f"identity_{A_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
+				save_image(torch.cat([identity_B, B], dim=0) * 0.5 + 0.5, visualization_paths["valid_identity"] / f"identity_{B_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
+
 
 
 
@@ -161,13 +253,26 @@ def main(args):
 	# set random seed
 	set_random_seed(731)
 
+
 	# set checkpoint directory
 	args.ckpt_dir = args.ckpt_dir / datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
 	args.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
+
 	# save visualization
 	visualization_dir = args.ckpt_dir / "visualization"
 	visualization_dir.mkdir(parents=True, exist_ok=True)
+	vis_train_fake = visualization_dir / "train" / "fake"
+	vis_train_cycle = visualization_dir / "train" / "cycle"
+	vis_train_identity = visualization_dir / "train" / "identity"
+	vis_valid_fake = visualization_dir / "valid" / "fake"
+	vis_valid_cycle = visualization_dir / "valid" / "cycle"
+	vis_valid_identity = visualization_dir / "valid" / "identity"
+	visualization_paths = {"train_fake": vis_train_fake, "train_cycle": vis_train_cycle, "train_identity": vis_train_identity,
+						   "valid_fake": vis_valid_fake, "valid_cycle": vis_valid_cycle, "valid_identity": vis_valid_identity}
+	for vis_path in visualization_paths.keys():
+		visualization_paths[vis_path].mkdir(parents=True, exist_ok=True)
+
 
 	# set logger
 	logger = get_loggings(args.ckpt_dir)
@@ -193,40 +298,43 @@ def main(args):
 	)
 
 	# loss functions
-	L1 = nn.L1Loss()
+	l1 = nn.L1Loss()
 	mse = nn.MSELoss()
 
 	# dataset & dataloader
 	dataset = SkecthRenderDataset(
-		root_A=args.data_dir / "reality_images",
-		root_B=args.data_dir / "animation_images",
+		root_A=args.data_dir / f"{args.project_name}/{A_name}_images",
+		root_B=args.data_dir / f"{args.project_name}/{B_name}_images",
 		img_size=args.img_size,
 		logger=logger,
 	)
-	loader = DataLoader(
-		dataset,
+	train_len = int(len(dataset) * 0.8)
+	valid_len = len(dataset) - train_len
+	train_dataset, valid_dataset = random_split(dataset, lengths=[train_len, valid_len])
+	train_loader = DataLoader(
+		train_dataset,
 		batch_size=args.batch_size,
 		shuffle=True,
 		num_workers=args.num_workers,
 		pin_memory=True,
 	)
+	valid_loader = DataLoader(
+		valid_dataset,
+		batch_size=args.batch_size,
+		shuffle=False,
+		num_workers=args.num_workers,
+		pin_memory=True
+	)
 
 	# training (currently no validation)
 	for epoch in range(args.num_epoch):
 		print(f"Epoch: {epoch+1}/{args.num_epoch}")
-		train_fn(
-			disc_A,
-			disc_B,
-			gen_A,
-			gen_B,
-			loader,
-			opt_disc,
-			opt_gen,
-			L1,
-			mse,
-			epoch,
-			visualization_dir,
-		)
+		train_kwargs = {"disc_A": disc_A, "disc_B": disc_B, "gen_A": gen_A, "gen_B": gen_B,
+						"train_loader": train_loader, "valid_loader": valid_loader,
+						"opt_disc": opt_disc, "opt_gen": opt_gen, "use_identity": args.use_identity,
+						"l1": l1, "mse": mse, "epoch": epoch, "visualization_paths": visualization_paths}
+		train_fn(**train_kwargs)
+		valid_fn(**train_kwargs)
 
 
 
