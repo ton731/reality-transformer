@@ -6,18 +6,18 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 
-class RealityAnimationDataset(Dataset):
-    def __init__(self, root_reality, root_animation, img_size, logger):
-        self.root_animation = root_animation
-        self.root_reality = root_reality
+class SkecthRenderDataset(Dataset):
+    def __init__(self, root_A, root_B, img_size, logger):
+        self.root_A = root_A
+        self.root_B = root_B
 
-        self.animation_images = os.listdir(root_animation)
-        self.reality_images = os.listdir(root_reality)
-        self.length_dataset = max(len(self.animation_images), len(self.reality_images))
-        self.animation_len = len(self.animation_images)
-        self.reality_len = len(self.reality_images)
-        logger.info(f"animation data: {self.animation_len}")
-        logger.info(f"reality data: {self.reality_len}")
+        self.A_images = os.listdir(root_A)
+        self.B_images = os.listdir(root_B)
+        self.length_dataset = max(len(self.A_images), len(self.B_images))
+        self.A_len = len(self.A_images)
+        self.B_len = len(self.B_images)
+        logger.info(f"A data: {self.A_len}")
+        logger.info(f"B data: {self.B_len}")
 
         self.transform = A.Compose(
             [
@@ -35,20 +35,20 @@ class RealityAnimationDataset(Dataset):
 
 
     def __getitem__(self, index):
-        animation_img = self.animation_images[index % self.animation_len]   # since len of animation and reality is not same
-        reality_img = self.reality_images[index % self.reality_len]
+        A_img = self.A_images[index % self.A_len]   # since len of animation and reality is not same
+        B_img = self.B_images[index % self.B_len]
 
-        animation_path = os.path.join(self.root_animation, animation_img)
-        reality_path = os.path.join(self.root_reality, reality_img)
+        A_path = os.path.join(self.root_A, A_img)
+        B_path = os.path.join(self.root_B, B_img)
 
-        animation_img = np.array(Image.open(animation_path).convert("RGB"))
-        reality_img = np.array(Image.open(reality_path).convert("RGB"))
+        A_img = np.array(Image.open(A_path).convert("RGB"))
+        B_img = np.array(Image.open(B_path).convert("RGB"))
 
         # transform
-        augmentations = self.transform(image=animation_img, image0=reality_img)
-        animation_img = augmentations["image"]
-        reality_img = augmentations["image0"]
+        augmentations = self.transform(image=A_img, image0=B_img)
+        A_img = augmentations["image"]
+        B_img = augmentations["image0"]
 
-        return animation_img, reality_img
+        return A_img, B_img
 
 

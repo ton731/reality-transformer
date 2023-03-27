@@ -13,7 +13,7 @@ import numpy as np
 import random
 from pathlib import Path
 
-from utils.dataset import RealityAnimationDataset
+from utils.dataset import SkecthRenderDataset
 from model.generator import Generator
 from model.discriminator import Discriminator
 
@@ -36,7 +36,7 @@ def parse_args() -> Namespace:
 	parser.add_argument("--lambda_cycle", type=float, default=10)
 
 	# training
-	parser.add_argument("--batch_size", type=int, default=3)
+	parser.add_argument("--batch_size", type=int, default=1)
 	parser.add_argument("--lr", type=float, default=1e-5)
 	parser.add_argument("--num_workers", type=int, default=4)
 	parser.add_argument("--num_epoch", type=int, default=150)
@@ -77,68 +77,69 @@ def get_loggings(ckpt_dir):
 
 
 
-# R for Reality
-# A for Animation
-def train_fn(disc_R, disc_A, gen_R, gen_A, loader, opt_disc, opt_gen, l1, mse, epoch, visualization_dir):
+# A for domain A
+# B for domain B
+def train_fn(disc_A, disc_B, gen_A, gen_B, loader, opt_disc, opt_gen, l1, mse, epoch, visualization_dir):
 	loop = tqdm(loader, leave=True)
-	R_reals = 0
-	R_fakes = 0
+	A_reals = 0
+	A_fakes = 0
 
-	for idx, (animation, reality) in enumerate(loop):
-		animation = animation.to(args.device)
-		reality = reality.to(args.device)
+	for idx, (B, A) in enumerate(loop):
+		B = B.to(args.device)
+		A = A.to(args.device)
 
 		# Train Discriminator H and Z
-		fake_reality = gen_R(animation)
-		D_R_real = disc_R(reality)
-		D_R_fake = disc_R(fake_reality.detach())
-		R_reals += D_R_real.mean().item()
-		R_fakes += D_R_fake.mean().item()
-		D_R_real_loss = mse(D_R_real, torch.ones_like(D_R_real))
-		D_R_fake_loss = mse(D_R_fake, torch.zeros_like(D_R_real))
-		D_R_loss = D_R_real_loss + D_R_fake_loss
-
-		fake_animation = gen_A(reality)
-		D_A_real = disc_A(animation)
-		D_A_fake = disc_A(fake_animation.detach())
+		fake_A = gen_A(B)
+		D_A_real = disc_A(A)
+		D_A_fake = disc_A(fake_A.detach())
+		A_reals += D_A_real.mean().item()
+		A_fakes += D_A_fake.mean().item()
 		D_A_real_loss = mse(D_A_real, torch.ones_like(D_A_real))
-		D_A_fake_loss = mse(D_A_fake, torch.zeros_like(D_A_fake))
+		D_A_fake_loss = mse(D_A_fake, torch.zeros_like(D_A_real))
 		D_A_loss = D_A_real_loss + D_A_fake_loss
 
+		fake_B = gen_B(A)
+		D_B_real = disc_B(B)
+		D_B_fake = disc_B(fake_B.detach())
+		D_B_real_loss = mse(D_B_real, torch.ones_like(D_B_real))
+		D_B_fake_loss = mse(D_B_fake, torch.zeros_like(D_B_fake))
+		D_B_loss = D_B_real_loss + D_B_fake_loss
+
 		# put it together
-		D_loss = (D_R_loss + D_A_loss) / 2
+		D_loss = (D_A_loss + D_B_loss) / 2
 		
 		opt_disc.zero_grad()
 		D_loss.backward()
 		opt_disc.step()
 
+
 		# Train Generators H and Z
 		# advesarial loss for both generators
-		D_R_fake = disc_R(fake_reality)
-		D_A_fake = disc_A(fake_animation)
-		loss_G_R = mse(D_R_fake, torch.ones_like(D_R_fake))
+		D_A_fake = disc_A(fake_A)
+		D_B_fake = disc_B(fake_B)
 		loss_G_A = mse(D_A_fake, torch.ones_like(D_A_fake))
+		loss_G_B = mse(D_B_fake, torch.ones_like(D_B_fake))
 
 		# cycle loss
-		cycle_animation = gen_A(fake_reality)
-		cycle_reality = gen_R(fake_animation)
-		cycle_animation_loss = l1(animation, cycle_animation)
-		cycle_reality_loss = l1(reality, cycle_reality)
+		cycle_B = gen_B(fake_A)
+		cycle_A = gen_A(fake_B)
+		cycle_B_loss = l1(B, cycle_B)
+		cycle_A_loss = l1(A, cycle_A)
 
 		# identity loss (remove these for efficiency if you set lambda_identity=0)
-		# identity_animation = gen_A(animation)
-		# identity_reality = gen_R(reality)
-		# identity_animation_loss = l1(animation, identity_animation)
-		# identity_reality_loss = l1(reality, identity_reality)
+		# identity_B = gen_B(B)
+		# identity_A = gen_A(A)
+		# identity_B_loss = l1(B, identity_B)
+		# identity_A_loss = l1(A, identity_A)
 
 		# add all together
 		G_loss = (
-			loss_G_A
-			+ loss_G_R
-			+ cycle_animation_loss * args.lambda_cycle
-			+ cycle_reality_loss * args.lambda_cycle
-			# + identity_animation_loss * args.lambda_identity
-			# + identity_reality_loss * args.lambda_identity
+			loss_G_B
+			+ loss_G_A
+			+ cycle_B_loss * args.lambda_cycle
+			+ cycle_A_loss * args.lambda_cycle
+			# + identity_B_loss * args.lambda_identity
+			# + identity_A_loss * args.lambda_identity
 		)
 		
 		opt_gen.zero_grad()
@@ -146,10 +147,10 @@ def train_fn(disc_R, disc_A, gen_R, gen_A, loader, opt_disc, opt_gen, l1, mse, e
 		opt_gen.step()
 
 		if idx % 50 == 0:
-			save_image(fake_reality * 0.5 + 0.5, visualization_dir / f"fake_reality_epoch{epoch}_idx{idx}.png")
-			save_image(fake_animation * 0.5 + 0.5, visualization_dir / f"fake_animation_epoch{epoch}_idx{idx}.png")
+			save_image(fake_A * 0.5 + 0.5, visualization_dir / f"fake_reality_epoch{epoch}_idx{idx}.png")
+			save_image(fake_B * 0.5 + 0.5, visualization_dir / f"fake_animation_epoch{epoch}_idx{idx}.png")
 		
-		loop.set_postfix(R_real=R_reals / (idx + 1), R_fake=R_fakes / (idx + 1))
+		loop.set_postfix(A_real=A_reals / (idx + 1), A_fake=A_fakes / (idx + 1))
 
 
 
@@ -174,19 +175,19 @@ def main(args):
 	logger.critical(args)
 
 	# initialize generator, discriminator
-	disc_R = Discriminator(in_channels=3).to(args.device) # discriminate reality
-	disc_A = Discriminator(in_channels=3).to(args.device)
+	disc_A = Discriminator(in_channels=3).to(args.device) # discriminate A
+	disc_B = Discriminator(in_channels=3).to(args.device)
+	gen_B = Generator(img_channels=3, num_residuals=9).to(args.device)
 	gen_A = Generator(img_channels=3, num_residuals=9).to(args.device)
-	gen_R = Generator(img_channels=3, num_residuals=9).to(args.device)
 
 	# optimizer
 	opt_disc = optim.Adam(
-		list(disc_R.parameters()) + list(disc_A.parameters()),
+		list(disc_A.parameters()) + list(disc_B.parameters()),
 		lr=args.lr,
 		betas=(0.5, 0.999),
 	)
 	opt_gen = optim.Adam(
-		list(gen_A.parameters()) + list(gen_R.parameters()),
+		list(gen_B.parameters()) + list(gen_A.parameters()),
 		lr=args.lr,
 		betas=(0.5, 0.999),
 	)
@@ -196,9 +197,9 @@ def main(args):
 	mse = nn.MSELoss()
 
 	# dataset & dataloader
-	dataset = RealityAnimationDataset(
-		root_reality=args.data_dir / "reality_images",
-		root_animation=args.data_dir / "animation_images",
+	dataset = SkecthRenderDataset(
+		root_A=args.data_dir / "reality_images",
+		root_B=args.data_dir / "animation_images",
 		img_size=args.img_size,
 		logger=logger,
 	)
@@ -214,10 +215,10 @@ def main(args):
 	for epoch in range(args.num_epoch):
 		print(f"Epoch: {epoch+1}/{args.num_epoch}")
 		train_fn(
-			disc_R,
 			disc_A,
-			gen_R,
+			disc_B,
 			gen_A,
+			gen_B,
 			loader,
 			opt_disc,
 			opt_gen,
