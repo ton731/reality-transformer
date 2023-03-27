@@ -15,6 +15,7 @@ import random
 from pathlib import Path
 
 from utils.dataset import SkecthRenderDataset
+from utils.metrics import CycleGANMetric
 from model.generator import Generator
 from model.discriminator import Discriminator
 
@@ -93,7 +94,8 @@ def train_fn(disc_A, disc_B, gen_A, gen_B,
 			 opt_disc, opt_gen,
 			 use_identity, 
 			 l1, mse, 
-			 epoch, visualization_paths,
+			 epoch,
+			 train_metric, logger, visualization_paths,
 			 **kwargs):
 
 	disc_A.train()
@@ -138,30 +140,35 @@ def train_fn(disc_A, disc_B, gen_A, gen_B,
 		loss_G_B = mse(D_B_fake, torch.ones_like(D_B_fake))
 
 		# cycle loss
-		cycle_B = gen_B(fake_A)
 		cycle_A = gen_A(fake_B)
-		cycle_B_loss = l1(B, cycle_B)
+		cycle_B = gen_B(fake_A)
 		cycle_A_loss = l1(A, cycle_A)
+		cycle_B_loss = l1(B, cycle_B)
 
 		# add all together
 		G_loss = (
 			loss_G_B
 			+ loss_G_A
-			+ cycle_B_loss * args.lambda_cycle
 			+ cycle_A_loss * args.lambda_cycle
+			+ cycle_B_loss * args.lambda_cycle
 		)
 
 		# identity loss (remove these for efficiency if you set lambda_identity=0)
+		identity_A, identity_B = None, None
 		if use_identity:
-			identity_B = gen_B(B)
 			identity_A = gen_A(A)
-			identity_B_loss = l1(B, identity_B)
+			identity_B = gen_B(B)
 			identity_A_loss = l1(A, identity_A)
+			identity_B_loss = l1(B, identity_B)
 			G_loss += identity_B_loss * args.lambda_identity + identity_A_loss * args.lambda_identity
 		
 		opt_gen.zero_grad()
 		G_loss.backward()
 		opt_gen.step()
+
+		# metric update
+		train_metric.batch_update(epoch, D_A_real, D_A_fake, D_B_real, D_B_fake,
+								  cycle_A, cycle_B, A, B, identity_A, identity_B)
 
 		# visualize
 		if idx % 50 == 0:
@@ -181,14 +188,17 @@ def train_fn(disc_A, disc_B, gen_A, gen_B,
 				save_image(torch.cat([identity_A, A], dim=0) * 0.5 + 0.5, visualization_paths["train_identity"] / f"identity_{A_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
 				save_image(torch.cat([identity_B, B], dim=0) * 0.5 + 0.5, visualization_paths["train_identity"] / f"identity_{B_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
 
-
+	# update metric for whole epoch
+	train_metric.epoch_update(epoch)
+	logger.info(train_metric.info(epoch))
 
 
 @torch.no_grad()
 def valid_fn(disc_A, disc_B, gen_A, gen_B, 
 			 valid_loader, 
 			 use_identity, 
-			 epoch, visualization_paths,
+			 epoch,
+			 valid_metric, logger, visualization_paths,
 			 **kwargs):
 
 	disc_A.eval()
@@ -217,13 +227,18 @@ def valid_fn(disc_A, disc_B, gen_A, gen_B,
 		D_B_fake = disc_B(fake_B)
 
 		# cycle loss
-		cycle_B = gen_B(fake_A)
 		cycle_A = gen_A(fake_B)
+		cycle_B = gen_B(fake_A)
 
 		# identity loss (remove these for efficiency if you set lambda_identity=0)
+		identity_A, identity_B = None, None
 		if use_identity:
-			identity_B = gen_B(B)
 			identity_A = gen_A(A)
+			identity_B = gen_B(B)
+
+		# metric update
+		valid_metric.batch_update(epoch, D_A_real, D_A_fake, D_B_real, D_B_fake,
+								  cycle_A, cycle_B, A, B, identity_A, identity_B)
 
 		# visualize
 		if idx % 10 == 0:
@@ -243,7 +258,9 @@ def valid_fn(disc_A, disc_B, gen_A, gen_B,
 				save_image(torch.cat([identity_A, A], dim=0) * 0.5 + 0.5, visualization_paths["valid_identity"] / f"identity_{A_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
 				save_image(torch.cat([identity_B, B], dim=0) * 0.5 + 0.5, visualization_paths["valid_identity"] / f"identity_{B_name}_epoch{epoch}_idx{idx}.png", nrow=nrow)
 
-
+	# update metric for whole epoch
+	valid_metric.epoch_update(epoch)
+	logger.info(valid_metric.info(epoch))
 
 
 
@@ -326,13 +343,19 @@ def main(args):
 		pin_memory=True
 	)
 
+	# metrics
+	train_metric = CycleGANMetric(name="train", use_identity=args.use_identity, num_epoch=args.num_epoch)
+	valid_metric = CycleGANMetric(name="valid", use_identity=args.use_identity, num_epoch=args.num_epoch)
+
 	# training (currently no validation)
 	for epoch in range(args.num_epoch):
 		print(f"Epoch: {epoch+1}/{args.num_epoch}")
 		train_kwargs = {"disc_A": disc_A, "disc_B": disc_B, "gen_A": gen_A, "gen_B": gen_B,
 						"train_loader": train_loader, "valid_loader": valid_loader,
 						"opt_disc": opt_disc, "opt_gen": opt_gen, "use_identity": args.use_identity,
-						"l1": l1, "mse": mse, "epoch": epoch, "visualization_paths": visualization_paths}
+						"l1": l1, "mse": mse, "epoch": epoch,
+						"train_metric": train_metric, "valid_metric": valid_metric,
+						"logger": logger, "visualization_paths": visualization_paths}
 		train_fn(**train_kwargs)
 		valid_fn(**train_kwargs)
 
