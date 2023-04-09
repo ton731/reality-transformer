@@ -25,8 +25,11 @@ from model.discriminator import Discriminator
 # A_name = "reality"
 # B_name = "animation"
 
-A_name = "photo"
-B_name = "monet"
+# A_name = "photo"
+# B_name = "monet"
+
+A_name = "sketch"
+B_name = "render"
 
 
 
@@ -36,7 +39,7 @@ def parse_args() -> Namespace:
 
 	# data path
 	parser.add_argument("--data_dir", type=Path, default="./data/")
-	parser.add_argument("--project_name", type=str, default="monet2photo", help="reality2animation, monet2photo")	
+	parser.add_argument("--project_name", type=str, default="sketch2render", help="reality2animation, monet2photo, sketch2render")	
 
 	# checkpoint
 	parser.add_argument("--ckpt_dir", type=Path, default="./results/")
@@ -50,10 +53,10 @@ def parse_args() -> Namespace:
 	parser.add_argument("--lambda_cycle", type=float, default=10)
 
 	# training
-	parser.add_argument("--batch_size", type=int, default=2)
+	parser.add_argument("--batch_size", type=int, default=3)
 	parser.add_argument("--lr", type=float, default=1e-5)
 	parser.add_argument("--num_workers", type=int, default=4)
-	parser.add_argument("--num_epoch", type=int, default=150)
+	parser.add_argument("--num_epoch", type=int, default=50)
 	parser.add_argument("--device", type=torch.device, default="cuda")
 
 	args = parser.parse_args()
@@ -172,7 +175,7 @@ def train_fn(disc_A, disc_B, gen_A, gen_B,
 								  cycle_A, cycle_B, A, B, identity_A, identity_B)
 
 		# visualize
-		if idx % 50 == 0:
+		if idx % 400 == 0:
 			batch_size = A.shape[0]
 			nrow = batch_size
 			
@@ -242,7 +245,7 @@ def valid_fn(disc_A, disc_B, gen_A, gen_B,
 								  cycle_A, cycle_B, A, B, identity_A, identity_B)
 
 		# visualize
-		if idx % 10 == 0:
+		if idx % 100 == 0:
 			batch_size = A.shape[0]
 			nrow = batch_size
 			
