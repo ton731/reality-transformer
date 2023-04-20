@@ -37,6 +37,9 @@ B_name = "render"
 def parse_args() -> Namespace:
 	parser = ArgumentParser()
 
+	# suffix
+	parser.add_argument("--suffix", type=str, default="12pt_AddEnvColor_ChairTableChandlierColor")
+
 	# data path
 	parser.add_argument("--data_dir", type=Path, default="./data/")
 	parser.add_argument("--project_name", type=str, default="sketch2render", help="reality2animation, monet2photo, sketch2render")	
@@ -276,7 +279,10 @@ def main(args):
 
 
 	# set checkpoint directory
-	args.ckpt_dir = args.ckpt_dir / datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
+	if len(args.suffix) > 2:
+		args.ckpt_dir = args.ckpt_dir / f'{datetime.now().strftime("%Y_%m_%d__%H_%M_%S")}__{args.suffix}'
+	else:
+		args.ckpt_dir = args.ckpt_dir / f'{datetime.now().strftime("%Y_%m_%d__%H_%M_%S")}'
 	args.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
 
