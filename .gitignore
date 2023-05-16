@@ -4,8 +4,8 @@ __pycache__/
 *$py.class
 
 
-# data
-data/
+# checkpoints
+checkpoints/
 
 # results
 results/
