@@ -16,8 +16,10 @@ sketch_image = cv2.imread("sketch.png")
 
 # render with ControlNet
 render_images = controlnet_inference.inference(input_image=sketch_image)
+print("generated render:", render_images[0].shape)
 plt.imshow(render_images[0])
-plt.show()
+plt.savefig("results/render.png")
+# plt.show()
 
 
 # get the furnuture segments

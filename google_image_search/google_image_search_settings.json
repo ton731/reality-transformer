@@ -1,0 +1,22 @@
+{
+  "upload": "upload",
+  "download": "download",
+  "separate": true,
+  "extention": [
+    ".bmp",
+    ".jpg",
+    ".jpeg",
+    ".tif",
+    ".tiff",
+    ".jfif",
+    ".png",
+    ".gif",
+    ".iff",
+    ".ilbm"
+  ],
+  "sleep_time": 6,
+  "webdriver_path": "/usr/local/bin/chromedriver.exe",
+  "brower": "chrome",
+  "profile_path": "/Users/jasper/Library/Application Support/Google/Chrome/Default",
+  "mirror": false
+}
